@@ -1,0 +1,21 @@
+/* XPM */
+static const char *check[] = {
+"16 16 2 1",
+"  c None",
+"o c #263137",
+"                ",
+"                ",
+"                ",
+"                ",
+"             oo ",
+"            ooo ",
+"           ooo  ",
+"  oo      ooo   ",
+"  ooo    ooo    ",
+"   ooo  ooo     ",
+"    oooooo      ",
+"     oooo       ",
+"      oo        ",
+"                ",
+"                ",
+"                "};
