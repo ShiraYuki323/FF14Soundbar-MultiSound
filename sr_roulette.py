@@ -2654,8 +2654,11 @@ class AudioEngine(QObject):
             "dropped": self.capture.dropped if self.capture else 0,
         }
 
-    def play(self, idx: int) -> bool:
+    def play(self, idx: int, *, entry_idx: int | None = None) -> bool:
         """播放第 idx 个槽位。会按该音效自己的设置算音量和变调。"""
+        slot_idx = idx
+        if entry_idx is not None:
+            idx = entry_idx
         if not self._active_mixers():
             self.rebuild()
         if not (0 <= idx < len(self.clips)):
@@ -2663,15 +2666,15 @@ class AudioEngine(QObject):
         repeat_enabled=self.cfg.get('repeat_accel_enabled') is True
         repeat_now=time.monotonic()
         repeat_window=max(5.0,2*getattr(getattr(self.bank,'model',None),'cooldown',0))
-        repeat_factor=self._repeat_acceleration.next_rate(idx,repeat_now,repeat_window) if repeat_enabled else 1.0
+        repeat_factor=self._repeat_acceleration.next_rate(slot_idx,repeat_now,repeat_window) if repeat_enabled else 1.0
 
         # 组合条目：不走普通音效那套连击变调，直接进组合排程
         entry = self.bank.entry_at(idx)
         if isinstance(entry, ComboEntry):
             ok = self.play_combo(entry.cdef,gain_scale=getattr(entry,"gain_scale",1.0),repeat_factor=repeat_factor)
             if ok:
-                self.last_idx = idx
-                self._accept_repeat(idx,repeat_now,repeat_factor,repeat_enabled)
+                self.last_idx = slot_idx
+                self._accept_repeat(slot_idx,repeat_now,repeat_factor,repeat_enabled)
             return ok
 
         clip = self.clips[idx]
@@ -2740,12 +2743,12 @@ class AudioEngine(QObject):
 
         if DEBUG and (abs(semitones) >= 0.05 or abs(speed) >= 0.01):
             _log(f"[play] {idx} 变调 {semitones:+.1f} 半音 / 速度 {speed * 100:+.0f}%")
-        self.last_idx = idx
+        self.last_idx = slot_idx
         # 每个出口都要触发一次（波形是同一个，进度各走各的）
         ok = False
         for mix in self._active_mixers():
             ok = mix.trigger(clip, gain) or ok
-        if ok:self._accept_repeat(idx,repeat_now,repeat_factor,repeat_enabled)
+        if ok:self._accept_repeat(slot_idx,repeat_now,repeat_factor,repeat_enabled)
         return ok
 
     def _accept_repeat(self,index,now,factor,enabled):

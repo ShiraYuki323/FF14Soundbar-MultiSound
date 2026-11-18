@@ -12,9 +12,10 @@ from PySide6.QtWidgets import (
     QWidget, QFrame, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel,
     QPushButton, QToolButton, QStackedWidget, QScrollArea, QComboBox,
     QDoubleSpinBox, QDialog, QDialogButtonBox, QFormLayout, QSizePolicy, QStyle, QSlider,QSizeGrip,QCheckBox,QLineEdit,QMenu,
+    QListWidget, QListWidgetItem,
 )
 from skillbar_model import (contained_path,key_label,canonical_key,is_combo_reference,reserved_trigger_keys,
-                            slot_location,COLUMNS,DISPLAY_ORDER,SLOT_COUNT)
+                            slot_location,COLUMNS,DISPLAY_ORDER,SLOT_COUNT,SOUND_MODES,slot_sound_label)
 from skillbar_presets_ui import PresetActions
 from skillbar_advanced_ui import AdvancedActions
 from library_management_ui import LibraryManagement
@@ -76,7 +77,7 @@ class SlotGrid(QWidget):
 
     def __init__(self, model, icons, parent=None,name_resolver=None):
         super().__init__(parent)
-        self.name_resolver=name_resolver or (lambda name:Path(name).stem if name else '未设音效')
+        self.name_resolver=name_resolver or slot_sound_label
         self.model, self.icons = model, icons
         self.buttons, self.labels = [None]*SLOT_COUNT, [None]*SLOT_COUNT
         layout = QGridLayout(self)
@@ -106,9 +107,9 @@ class SlotGrid(QWidget):
 
     def refresh(self, selected=-1, matching=None):
         for index, slot in enumerate(self.model.slots):
-            name = self.name_resolver(slot.sound)
+            name = self.name_resolver(slot)
             button = self.buttons[index]
-            button.selected, button.matched = index == selected, bool(matching and matching == slot.sound)
+            button.selected, button.matched = index == selected, bool(matching and matching in slot.sounds)
             description = f'{slot_location(index)} · {key_label(slot.key) or "未设置按键"} · {name}'
             if self.model.slot_is_ability(slot):description+=' · 能力技（独立冷却）'
             review=getattr(self.model,'review',{}).get(index,())
@@ -116,6 +117,114 @@ class SlotGrid(QWidget):
             button.setToolTip(description); button.setAccessibleName(description); button.update()
             self.labels[index].setText(self.labels[index].fontMetrics().elidedText(name, Qt.ElideRight, 65) if slot.sound else '')
             self.labels[index].setToolTip(name if slot.sound else '')
+
+
+class SoundBindingDialog(QDialog):
+    def __init__(self, window, index, save):
+        super().__init__(window)
+        self.setWindowTitle(f'{slot_location(index)} · 绑定多个音效')
+        self.resize(490, 350)
+        self.window = window
+        self.save = save
+        slot = window.model.slots[index]
+        layout = QVBoxLayout(self)
+        picker = QHBoxLayout()
+        self.available = QComboBox()
+        self.available.setAccessibleName('可添加的音效')
+        for name, label in window.library_items():
+            self.available.addItem(label, name)
+            self.available.setItemData(self.available.count() - 1, name, Qt.ToolTipRole)
+        picker.addWidget(self.available, 1)
+        self.add_button = QPushButton('添加')
+        self.add_button.clicked.connect(self.add_sound)
+        picker.addWidget(self.add_button)
+        layout.addLayout(picker)
+
+        self.sounds = QListWidget()
+        self.sounds.setAccessibleName('已绑定的音效列表')
+        for name in slot.sounds:
+            self.append_sound(name)
+        layout.addWidget(self.sounds, 1)
+
+        actions = QHBoxLayout()
+        self.up_button = QPushButton('上移')
+        self.down_button = QPushButton('下移')
+        self.remove_button = QPushButton('移除')
+        self.up_button.clicked.connect(lambda: self.move_sound(-1))
+        self.down_button.clicked.connect(lambda: self.move_sound(1))
+        self.remove_button.clicked.connect(self.remove_sound)
+        for button in (self.up_button, self.down_button, self.remove_button):
+            actions.addWidget(button)
+        actions.addStretch()
+        actions.addWidget(QLabel('播放方式'))
+        self.mode = QComboBox()
+        self.mode.setAccessibleName('播放方式')
+        for value, label in SOUND_MODES.items():
+            self.mode.addItem(label, value)
+        self.mode.setCurrentIndex(self.mode.findData(slot.sound_mode))
+        actions.addWidget(self.mode)
+        layout.addLayout(actions)
+
+        self.feedback = QLabel()
+        self.feedback.setWordWrap(True)
+        layout.addWidget(self.feedback)
+        buttons = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
+        buttons.button(QDialogButtonBox.Save).setText('保存')
+        buttons.button(QDialogButtonBox.Cancel).setText('取消')
+        buttons.accepted.connect(self.save_binding)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+        self.available.currentIndexChanged.connect(self.refresh_actions)
+        self.sounds.currentRowChanged.connect(self.refresh_actions)
+        self.sounds.setCurrentRow(0)
+        self.refresh_actions()
+
+    def references(self):
+        return tuple(self.sounds.item(row).data(Qt.UserRole) for row in range(self.sounds.count()))
+
+    def append_sound(self, name):
+        label = self.window.sound_label(name)
+        if self.window.missing_reference(name):
+            label += '（缺失）'
+        item = QListWidgetItem(label)
+        item.setData(Qt.UserRole, name)
+        item.setToolTip(name)
+        self.sounds.addItem(item)
+
+    def refresh_actions(self):
+        row, count = self.sounds.currentRow(), self.sounds.count()
+        name = self.available.currentData()
+        self.add_button.setEnabled(bool(name) and name not in self.references())
+        self.up_button.setEnabled(row > 0)
+        self.down_button.setEnabled(0 <= row < count - 1)
+        self.remove_button.setEnabled(row >= 0)
+        self.mode.setEnabled(count > 1)
+
+    def add_sound(self):
+        name = self.available.currentData()
+        if name and name not in self.references():
+            self.append_sound(name)
+            self.sounds.setCurrentRow(self.sounds.count() - 1)
+            self.refresh_actions()
+
+    def move_sound(self, step):
+        row = self.sounds.currentRow()
+        if row >= 0 and 0 <= row + step < self.sounds.count():
+            self.sounds.insertItem(row + step, self.sounds.takeItem(row))
+            self.sounds.setCurrentRow(row + step)
+            self.refresh_actions()
+
+    def remove_sound(self):
+        row = self.sounds.currentRow()
+        if row >= 0:
+            self.sounds.takeItem(row)
+            self.refresh_actions()
+
+    def save_binding(self):
+        if self.save(self.references(), self.mode.currentData()):
+            self.accept()
+        else:
+            self.feedback.setText(self.window.status.text())
 
 
 class IconPicker(QDialog):
@@ -276,7 +385,7 @@ class SkillbarWindow(QWidget,PresetActions,AdvancedActions,LibraryManagement):
         setup.addWidget(self.wheel_only)
         layout.addLayout(setup)
         layout.addWidget(self.build_preset_controls())
-        self.grid=SlotGrid(self.model,self.icons,name_resolver=self.sound_label);self.grid.clicked.connect(self.select_slot);self.grid.double_clicked.connect(self.preview_slot);layout.addWidget(self.grid)
+        self.grid=SlotGrid(self.model,self.icons,name_resolver=self.slot_sound_label);self.grid.clicked.connect(self.select_slot);self.grid.double_clicked.connect(self.preview_slot);layout.addWidget(self.grid)
         cdframe=QFrame();cdframe.setObjectName('CooldownStrip');cdline=QHBoxLayout(cdframe);cdline.setContentsMargins(0,12,0,0)
         self.ready_label=QLabel();self.ready_label.setObjectName('Ready');cdline.addWidget(self.ready_label)
         self.bar_pause_button=QPushButton('暂停触发');self.bar_pause_button.setEnabled(False)
@@ -300,7 +409,11 @@ class SkillbarWindow(QWidget,PresetActions,AdvancedActions,LibraryManagement):
         self.sound_select=QComboBox();self.sound_select.activated.connect(self._change_sound)
         self.sound_select.setSizePolicy(QSizePolicy.Ignored,QSizePolicy.Fixed);self.sound_select.setMinimumWidth(135)
         audio_header=QHBoxLayout();audio_header.addWidget(QLabel('绑定音效'));audio_header.addStretch()
-        self.advanced_button=QPushButton('参数…');self.advanced_button.setObjectName('TextButton');self.advanced_button.clicked.connect(lambda:self.open_sound_parameters());audio_header.addWidget(self.advanced_button)
+        self.multi_sound_button = QPushButton('多音效…')
+        self.multi_sound_button.setObjectName('TextButton')
+        self.multi_sound_button.clicked.connect(self.open_sound_binding)
+        audio_header.addWidget(self.multi_sound_button)
+        self.advanced_button=QPushButton('参数…');self.advanced_button.setObjectName('TextButton');self.advanced_button.clicked.connect(self.open_bound_parameters);audio_header.addWidget(self.advanced_button)
         form.addLayout(audio_header,0,1);form.addWidget(self.sound_select,1,1)
         self.icon_button=QPushButton('选择职业与技能');self.icon_button.clicked.connect(self.open_icon_picker)
         form.addWidget(QLabel('技能图标'),0,2);form.addWidget(self.icon_button,1,2)
@@ -376,10 +489,18 @@ class SkillbarWindow(QWidget,PresetActions,AdvancedActions,LibraryManagement):
         self.ready_label.setStyleSheet('color:'+color)
 
     def preview_slot(self,index):
-        self.stop_preview();slot=self.model.slots[index];self.preview_entry(slot.sound,slot.volume)
+        self.stop_preview()
+        self.audition_slot(index)
 
     def preview_selected(self):
-        slot=self.model.slots[self.selected];self.preview_entry(slot.sound,slot.volume)
+        self.audition_slot(self.selected)
+
+    def audition_slot(self, index):
+        slot = self.model.slots[index]
+        name = slot.sound
+        if slot.extra_sounds:
+            name = next((name for name in slot.sounds if not self.missing_reference(name)), slot.sound)
+        self.preview_entry(name, slot.volume)
 
     def _build_library(self):
         root = QVBoxLayout(self.library_page)
@@ -409,8 +530,10 @@ class SkillbarWindow(QWidget,PresetActions,AdvancedActions,LibraryManagement):
         self.binding_panel = QFrame(); self.binding_panel.setObjectName('Binding'); panel = QVBoxLayout(self.binding_panel)
         top = QHBoxLayout(); self.binding_title = QLabel(); self.binding_title.setObjectName('Heading'); top.addWidget(self.binding_title)
         top.addStretch(); self.finish_binding = QPushButton('完成'); self.finish_binding.clicked.connect(self.close_binding); top.addWidget(self.finish_binding); panel.addLayout(top)
-        self.binding_grid = SlotGrid(self.model, self.icons,name_resolver=self.sound_label); self.binding_grid.clicked.connect(self._bind_slot); panel.addWidget(self.binding_grid)
+        self.binding_grid = SlotGrid(self.model, self.icons,name_resolver=self.slot_sound_label); self.binding_grid.clicked.connect(self._bind_slot); panel.addWidget(self.binding_grid)
         foot = QHBoxLayout(); self.binding_status = QLabel('选择一个技能格。'); foot.addWidget(self.binding_status, 1)
+        self.append_binding = QCheckBox('追加到已有绑定')
+        foot.addWidget(self.append_binding)
         self.undo_button = QPushButton('撤销上次绑定'); self.undo_button.clicked.connect(self._undo); foot.addWidget(self.undo_button); panel.addLayout(foot)
         root.addWidget(self.binding_panel); self.binding_panel.hide()
         columns=QHBoxLayout()
@@ -568,6 +691,36 @@ class SkillbarWindow(QWidget,PresetActions,AdvancedActions,LibraryManagement):
     def _change_sound(self, index):
         self._apply(lambda: self.model.bind(self.selected,self.sound_select.itemData(index)), 'sound')
 
+    def slot_sound_label(self, slot):
+        return slot_sound_label(slot, self.effects)
+
+    def open_sound_binding(self):
+        index = self.selected
+
+        def save_binding(names, mode):
+            slot = self.model.slots[index]
+            if names == slot.sounds and (len(names) < 2 or mode == slot.sound_mode):
+                return True
+            return self._apply(lambda: self.model.bind_sounds(index, names, mode), 'sound')
+
+        dialog = SoundBindingDialog(self, index, save_binding)
+        dialog.exec()
+        dialog.deleteLater()
+
+    def open_bound_parameters(self):
+        slot = self.model.slots[self.selected]
+        if not slot.extra_sounds:
+            self.open_sound_parameters()
+            return
+        menu = QMenu(self.advanced_button)
+        for name in slot.sounds:
+            action = menu.addAction(self.sound_label(name))
+            action.setData(name)
+        action = menu.exec(self.advanced_button.mapToGlobal(self.advanced_button.rect().bottomLeft()))
+        if action is not None:
+            self.open_sound_parameters(action.data())
+        menu.deleteLater()
+
     def _change_ability(self,enabled):
         if not self._apply(lambda:self.model.update_slot(self.selected,ability=enabled),'ability'):
             self.refresh_editor()
@@ -631,9 +784,9 @@ class SkillbarWindow(QWidget,PresetActions,AdvancedActions,LibraryManagement):
     def refresh_editor(self):
         slot = self.model.slots[self.selected]
         self.selected_title.setText(f'{slot_location(self.selected)} · {key_label(slot.key) or "未设键"}')
-        missing=bool(slot.sound and self.missing_reference(slot.sound))
-        self.selected_label.setText('音效缺失' if missing else '')
-        self.selected_label.setVisible(missing)
+        missing = sum(self.missing_reference(name) for name in slot.sounds)
+        self.selected_label.setText((f'{missing} 个音效缺失' if slot.extra_sounds else '音效缺失') if missing else '')
+        self.selected_label.setVisible(bool(missing))
         art=self.icons.pixmap(slot.icon)
         if not art.isNull():self.selected_icon.setPixmap(art.scaled(41,41,Qt.KeepAspectRatio,Qt.SmoothTransformation))
         else:self.selected_icon.clear();self.selected_icon.setText('＋')
@@ -647,10 +800,22 @@ class SkillbarWindow(QWidget,PresetActions,AdvancedActions,LibraryManagement):
         self.ability_auto.setVisible(slot.ability is not None)
         self.ability_source.setText('手动设置' if slot.ability is not None else
                                     '已按图标识别' if slot.icon in self.icons.action_types else '图标类型未识别')
-        self.sound_select.blockSignals(True); self.sound_select.clear(); self.sound_select.addItem('未设置音效',None)
-        for name,label in self.library_items(): self.sound_select.addItem(label,name)
-        if slot.sound and self.sound_select.findData(slot.sound)<0:self.sound_select.addItem(self.sound_label(slot.sound)+'（缺失）',slot.sound)
-        self.sound_select.setCurrentIndex(max(0,self.sound_select.findData(slot.sound))); self.sound_select.blockSignals(False)
+        self.sound_select.blockSignals(True)
+        self.sound_select.clear()
+        self.sound_select.setEnabled(not slot.extra_sounds)
+        if slot.extra_sounds:
+            self.sound_select.addItem(self.slot_sound_label(slot))
+            self.sound_select.setToolTip('点「多音效…」编辑列表和播放方式。')
+        else:
+            self.sound_select.setToolTip('')
+            self.sound_select.addItem('未设置音效', None)
+            for name, label in self.library_items():
+                self.sound_select.addItem(label, name)
+            if slot.sound and self.sound_select.findData(slot.sound) < 0:
+                self.sound_select.addItem(self.sound_label(slot.sound) + '（缺失）', slot.sound)
+            self.sound_select.setCurrentIndex(max(0, self.sound_select.findData(slot.sound)))
+        self.sound_select.blockSignals(False)
+        self.audition_button.setToolTip('试听列表中的首个可用音效。' if slot.extra_sounds else '')
 
     def refresh(self):
         self.refresh_presets();self.cooldown.setValue(self.model.cooldown)
@@ -660,7 +825,7 @@ class SkillbarWindow(QWidget,PresetActions,AdvancedActions,LibraryManagement):
         return sorted((p for p in self.sound_root.rglob('*') if p.is_file() and p.resolve().is_relative_to(self.sound_root.resolve()) and p.suffix.lower() in ('.wav','.mp3','.ogg','.flac','.m4a') and not any(part.startswith('.') for part in p.relative_to(self.sound_root).parts)),key=lambda p:str(p).lower())
 
     def bound_indices(self, sound):
-        return [i for i,slot in enumerate(self.model.slots) if slot.sound==sound]
+        return [i for i,slot in enumerate(self.model.slots) if sound in slot.sounds]
 
     def refresh_library(self):
         while self.library_layout.count():
@@ -746,11 +911,16 @@ class SkillbarWindow(QWidget,PresetActions,AdvancedActions,LibraryManagement):
 
     def _bind_slot(self,index):
         if not self.binding_sound: return
-        if self.model.slots[index].sound==self.binding_sound:
-            self.binding_status.setText('这个技能已经绑定此音效。'); return
-        before=self.model.slots[index].sound
-        if self._apply(lambda:self.model.bind(index,self.binding_sound),'sound'):
-            self.binding_status.setText(f'已绑定到 {key_label(self.model.slots[index].key) or "无按键格"}'+('，替换「'+self.sound_label(before)+'」。' if before else '。'))
+        slot = self.model.slots[index]
+        append = self.append_binding.isChecked()
+        names = slot.sounds if append else ()
+        if self.binding_sound in names or slot.sounds == (self.binding_sound,):
+            self.binding_status.setText('这个技能已经绑定此音效。')
+            return
+        if self._apply(lambda: self.model.bind_sounds(index, (*names, self.binding_sound), slot.sound_mode), 'sound'):
+            key = key_label(slot.key) or '无按键格'
+            detail = '，已追加到列表' if append and names else f'，替换「{self.slot_sound_label(slot)}」' if slot.sounds else ''
+            self.binding_status.setText(f'已绑定到 {key}{detail}。')
 
     def _undo(self):
         if self._apply(self.model.undo,'sound'): self.binding_status.setText('已撤销上次绑定。')

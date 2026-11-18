@@ -6,6 +6,33 @@ from unittest.mock import patch
 
 
 class SkillbarModelTests(unittest.TestCase):
+    def test_multiple_bindings_survive_restart_preset_switch_and_undo(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / 'bar.json'
+            model = self.model(path)
+            model.bind(12, 'first.wav')
+            legacy = self.model(path)
+            self.assertEqual(legacy.slots[12].sounds, ('first.wav',))
+            self.assertFalse(legacy.slots[12].extra_sounds)
+
+            names = ('first.wav', 'combo::second', 'third.wav')
+            legacy.bind_sounds(12, names, 'random')
+            legacy.update_slot(12, volume=.4)
+            self.assertTrue(legacy.undo())
+            self.assertEqual((legacy.slots[12].sounds, legacy.slots[12].volume), (('first.wav',), .4))
+            legacy.bind_sounds(12, names, 'random')
+            identity = legacy.active_preset
+            legacy.save_preset()
+            legacy.new_preset('另一套')
+            loaded = self.model(path)
+            loaded.activate_preset(identity)
+            self.assertEqual((loaded.slots[12].sounds, loaded.slots[12].sound_mode), (names, 'random'))
+            before = path.read_bytes()
+            for rejected in (('a.wav', 'a.wav'), ('a.wav', '../outside.wav'), ('', 'a.wav')):
+                with self.assertRaises(ValueError):
+                    loaded.bind_sounds(12, rejected)
+                self.assertEqual(path.read_bytes(), before)
+
     def test_screenshot_apply_is_visual_only_atomic_and_keeps_review_after_restart(self):
         from screenshot_import import VisualResult
         with tempfile.TemporaryDirectory() as folder:

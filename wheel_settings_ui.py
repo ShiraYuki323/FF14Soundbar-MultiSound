@@ -25,7 +25,7 @@ class WheelOrderDialog(QDialog):
     def refresh(self,selected=0):
         self.list.clear();directions=['上','右上','右','右下','下','左下','左','左上']
         for position,index in enumerate(self.order):
-            slot=self.window.model.slots[index];name=self.window.sound_label(slot.sound)
+            slot=self.window.model.slots[index];name=self.window.slot_sound_label(slot)
             item=QListWidgetItem(QIcon(self.window.icons.pixmap(slot.icon)),f'第{position//PAGE_SIZE+1}页 · {directions[position%PAGE_SIZE]}　{key_label(slot.key) or "未设键"}　{name}')
             item.setToolTip(f'{slot_location(index)} · {name}');self.list.addItem(item)
         self.list.setCurrentRow(selected)

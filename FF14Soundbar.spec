@@ -2,6 +2,7 @@
 import sys
 from pathlib import Path
 sys.path.insert(0, SPECPATH)
+from diagnostics import VERSION
 from packaging_helpers import without_system_icu
 from virtual_cable import CablePackage
 
@@ -36,7 +37,7 @@ a = Analysis(
 a.binaries = without_system_icu(a.binaries)
 pyz = PYZ(a.pure)
 exe = EXE(
-    pyz,a.scripts,a.binaries,a.datas,[],name='FF14音效技能栏_分享版_v1.0',icon=str(icon) if icon.is_file() else None,
+    pyz,a.scripts,a.binaries,a.datas,[],name=f'FF14音效技能栏_分享版_{VERSION}',icon=str(icon) if icon.is_file() else None,
     debug=False,bootloader_ignore_signals=False,strip=False,upx=False,
     console=False,disable_windowed_traceback=False,
 )

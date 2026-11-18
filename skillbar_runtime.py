@@ -1,12 +1,13 @@
 """Adapt skill slots to the original mixer and non-blocking input state machine."""
 from __future__ import annotations
 
+import random
 import time
 from dataclasses import replace
 from pathlib import Path
 
 import sr_roulette as sr
-from skillbar_model import contained_path,is_combo_reference,sound_label,SLOT_COUNT
+from skillbar_model import contained_path,is_combo_reference,slot_sound_label,SLOT_COUNT
 
 
 class SkillbarBank(sr.SoundBank):
@@ -18,30 +19,110 @@ class SkillbarBank(sr.SoundBank):
         self.reload()
 
     def reload(self):
-        self.items=[]
-        for slot in self.model.slots:
-            if is_combo_reference(slot.sound):
-                combo=self.scfg.combo_of(slot.sound)
+        keys = [(index, slot.sound) for index, slot in enumerate(self.model.slots)]
+        slot_entries = []
+        for index, slot in enumerate(self.model.slots):
+            start = len(keys)
+            keys.extend((index, name) for name in slot.extra_sounds)
+            slot_entries.append((index, *range(start, len(keys))))
+        items = []
+        for slot_index, name in keys:
+            if is_combo_reference(name):
+                combo=self.scfg.combo_of(name)
                 entry=sr.ComboEntry(combo) if combo else None
-                if entry is not None:entry.gain_scale=slot.volume
-                self.items.append(entry)
-            else:self.items.append(contained_path(self.sound_root,slot.sound))
+                if entry is not None:entry.gain_scale=self.model.slots[slot_index].volume
+                items.append(entry)
+            else:
+                items.append(contained_path(self.sound_root, name))
+        self.items, self.sound_keys, self.slot_entries = items, keys, slot_entries
 
     def setting_at(self, index):
-        if not 0 <= index < self.slots or not self.model.slots[index].sound:
+        if not 0 <= index < len(self.sound_keys):
             return None
-        slot = self.model.slots[index]
-        base = self.scfg.setting(slot.sound)
-        return replace(base, volume=base.volume * slot.volume)
+        slot_index, name = self.sound_keys[index]
+        if not name:
+            return None
+        base = self.scfg.setting(name)
+        return replace(base, volume=base.volume * self.model.slots[slot_index].volume)
 
     def full_at(self, index):
-        return self.model.slots[index].sound or '' if 0 <= index < self.slots else ''
+        return (self.sound_keys[index][1] or '') if 0 <= index < len(self.sound_keys) else ''
 
     def name_at(self, index):
-        return sound_label(self.full_at(index),self.scfg)
+        return slot_sound_label(self.model.slots[index], self.scfg) if 0 <= index < self.slots else ''
 
     def index_of_name(self, name):
         return next((i for i, slot in enumerate(self.model.slots) if slot.sound == name), -1)
+
+
+class SkillbarAudioEngine(sr.AudioEngine):
+    def __init__(self, bank, cfg):
+        self._entry_keys = []
+        self._cycle_positions = {}
+        self._last_sound = None
+        super().__init__(bank, cfg)
+
+    def load(self, stop_playing=True):
+        keys = self.bank.sound_keys
+        for state in (self._last_at, self._pitch_now, self._speed_now, self._rnd_pitch):
+            for index in tuple(state):
+                if index >= len(keys) or self._entry_keys[index] != keys[index]:
+                    state.pop(index)
+        self._entry_keys = keys
+        for index, (sounds, mode, _) in tuple(self._cycle_positions.items()):
+            slot = self.bank.model.slots[index]
+            if (slot.sounds, slot.sound_mode) != (sounds, mode):
+                del self._cycle_positions[index]
+        super().load(stop_playing)
+
+    def reset_slot_playback(self):
+        self._cycle_positions.clear()
+        self._last_sound = self.last_idx = None
+
+    def _play_entry(self, slot_index, entry_index):
+        previous = self.last_idx
+        if not super().play(slot_index, entry_idx=entry_index):
+            if self.bank.model.slots[slot_index].extra_sounds:
+                self.last_idx = previous
+            return False
+        self._last_sound = self.bank.full_at(entry_index)
+        return True
+
+    def play(self, idx):
+        if not 0 <= idx < self.bank.slots:
+            return False
+        slot = self.bank.model.slots[idx]
+        if not slot.extra_sounds:
+            return self._play_entry(idx, idx)
+
+        entries = self.bank.slot_entries[idx]
+        sounds, mode = slot.sounds, slot.sound_mode
+        positions = list(range(len(entries)))
+        if mode == 'random':
+            random.shuffle(positions)
+        else:
+            _, _, start = self._cycle_positions.get(idx, (sounds, mode, 0))
+            positions = positions[start:] + positions[:start]
+        for position in positions:
+            entry = entries[position]
+            if entry >= len(self.clips) or (self.clips[entry] is None and not self.bank.is_combo(entry)):
+                continue
+            if self._play_entry(idx, entry):
+                if mode == 'cycle':
+                    self._cycle_positions[idx] = (sounds, mode, (position + 1) % len(entries))
+                return True
+        return False
+
+    def play_repeat_last(self):
+        if self.last_idx is None:
+            return False
+        index = self.last_idx
+        if not self.bank.model.slots[index].extra_sounds:
+            return self.play(index)
+        for entry in self.bank.slot_entries[index]:
+            if self.bank.full_at(entry) == self._last_sound:
+                return self._play_entry(index, entry)
+        return False
 
 
 ABILITY_DEBOUNCE_SECONDS = 1.0
@@ -100,12 +181,15 @@ class CooldownAudio:
         return self.play(index)
 
     def play(self, index):
+        return self._play(index, lambda: self.engine.play(index))
+
+    def _play(self, index, trigger):
         if not isinstance(index, int) or not 0 <= index < SLOT_COUNT:
             return False
         slot=self.model.slots[index]
         ability=self.model.slot_is_ability(slot)
         if not slot.sound or (self.ability_cooldown(index)[0] if ability else self.remaining()):return False
-        if not self.engine.play(index):
+        if not trigger():
             return False
         now=self.clock()
         duration=ABILITY_DEBOUNCE_SECONDS if ability else self.effective_gcd(now)
@@ -118,7 +202,8 @@ class CooldownAudio:
         return True
 
     def play_repeat_last(self):
-        return self.play(self.engine.last_idx)
+        index = self.engine.last_idx
+        return self._play(index, getattr(self.engine, 'play_repeat_last', lambda: self.engine.play(index)))
 
     def play_next(self):
         for step in range(1, SLOT_COUNT+1):

@@ -3,7 +3,7 @@ import json,logging,logging.handlers,os,platform,sys,tempfile,threading,zipfile,
 from pathlib import Path
 from PySide6.QtCore import qVersion,qInstallMessageHandler
 
-VERSION='v1.0'
+VERSION='v1.0.1'
 def redact(text,root):
     for path,label in ((str(Path(root)),'%APP_DATA%'),(str(Path(root).resolve()),'%APP_DATA%'),(str(Path.home()),'%USERPROFILE%')):
         text=text.replace(path,label).replace(path.replace('\\','/'),label)

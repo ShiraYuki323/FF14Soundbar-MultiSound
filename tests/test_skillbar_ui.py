@@ -72,6 +72,37 @@ class SkillbarUITests(unittest.TestCase):
         self.assertEqual(self.window.bound_indices('new.wav'), [])
         self.assertEqual(self.model.path.read_bytes(), before)
 
+    def test_multiple_bindings_can_be_added_reordered_and_saved_from_the_ui(self):
+        from PySide6.QtCore import QTimer
+        from skillbar_ui import SoundBindingDialog
+
+        self.model.bind(23, 'one.wav')
+        self.window.select_slot(23)
+
+        def edit():
+            dialog = self.window.findChild(SoundBindingDialog)
+            dialog.available.setCurrentIndex(dialog.available.findData('two.wav'))
+            dialog.add_button.click()
+            dialog.up_button.click()
+            dialog.mode.setCurrentIndex(dialog.mode.findData('random'))
+            dialog.save_binding()
+
+        QTimer.singleShot(0, edit)
+        self.window.multi_sound_button.click()
+        slot = self.model.slots[23]
+        self.assertEqual((slot.sounds, slot.sound_mode), (('two.wav', 'one.wav'), 'random'))
+        self.assertIn('随机播放', self.window.sound_select.currentText())
+        self.assertEqual(self.window.bound_indices('one.wav'), [23])
+
+        self.window.show_library()
+        self.window.bind_buttons['one.wav'].click()
+        self.window.append_binding.setChecked(True)
+        self.model.bind(12, 'two.wav')
+        self.window.binding_grid.buttons[12].click()
+        self.assertEqual(self.model.slots[12].sounds, ('two.wav', 'one.wav'))
+        self.window.undo_button.click()
+        self.assertEqual(self.model.slots[12].sounds, ('two.wav',))
+
     def test_profession_picker_applies_only_icon_to_selected_skill(self):
         self.model.bind(23, 'one.wav')
         self.window.select_slot(23)

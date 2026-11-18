@@ -4,7 +4,7 @@ from PySide6.QtCore import Qt,QRectF,QPointF
 from PySide6.QtGui import QColor,QPainter,QPainterPath,QPen,QFont
 from wheel_geometry import radii,slot_center,PAGE_COUNT,PAGE_SIZE
 from skillbar_paint import paint_slot,fit_frame
-from skillbar_model import key_label,sound_label
+from skillbar_model import key_label,slot_sound_label
 
 
 def page_rect(page,size):
@@ -33,7 +33,7 @@ def paint_wheel(widget):
         paint_slot(p,box,widget.icons,slot,selected=selected,review=widget.model.review.get(index,()),
                    ability=ability,remaining=cooldown[0],duration=cooldown[1])
         p.setFont(QFont('Microsoft YaHei UI',max(8,round(9*scale))));p.setPen(QColor('#f1e0b8' if selected else '#deded6' if slot.sound else '#818d92'))
-        label=sound_label(slot.sound,effects) if slot.sound else '未设音效'
+        label=slot_sound_label(slot,effects)
         text=p.fontMetrics().elidedText(label,Qt.ElideRight,round(102*scale))
         p.drawText(QRectF(x-55*scale,y+27*scale,110*scale,24*scale),Qt.AlignCenter,text)
     p.setBrush(QColor('#20272c'));p.setPen(QPen(QColor('#9c947d'),1));p.drawEllipse(c,inner-3,inner-3)
@@ -41,7 +41,7 @@ def paint_wheel(widget):
         p.setPen(QColor(color));p.setFont(QFont('Microsoft YaHei UI',max(8,round(points*scale))));p.drawText(rect,flags,value)
     text(QRectF(c.x()-inner+8,c.y()-64*scale,inner*2-16,22*scale),f'音效轮盘  ·  {widget.page+1} / {PAGE_COUNT}','#aebbbf',8)
     if widget.selected is not None:
-        slot=widget.model.slots[widget.selected];label=sound_label(slot.sound,effects)
+        slot=widget.model.slots[widget.selected];label=slot_sound_label(slot,effects)
         text(QRectF(c.x()-inner+8,c.y()-38*scale,inner*2-16,58*scale),label,points=10,flags=Qt.AlignCenter|Qt.TextWordWrap)
         text(QRectF(c.x()-inner+8,c.y()+17*scale,inner*2-16,18*scale),key_label(slot.key) or '无触发键','#c8bfaa',8)
     else:

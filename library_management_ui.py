@@ -17,7 +17,11 @@ class LibraryManagement:
         dialog=QMessageBox(self);dialog.setWindowTitle('删除音效')
         rows=[]
         for name in names:
-            current=len(self.bound_indices(name));presets=sum(any(slot.get('sound')==name for slot in entry['slots']) for entry in self.model.presets.values())
+            current = len(self.bound_indices(name))
+            presets = sum(
+                any(slot.get('sound') == name or name in slot.get('extra_sounds', ()) for slot in entry['slots'])
+                for entry in self.model.presets.values()
+            )
             combos=sum(any(item.sound==name for item in combo.items) for combo in self.effects.combos.values())
             rows.append(f'{self.sound_label(name)}：当前{current}格 / {presets}套装 / {combos}组合')
         dialog.setText(f'将 {len(names)} 个音效移入本地回收区？');dialog.setDetailedText('\n'.join(rows))

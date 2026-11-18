@@ -16,6 +16,7 @@ LEGACY_SLOTS = 2 * COLUMNS
 SLOT_COUNT = 3 * COLUMNS
 # The new row is shown above both original rows so existing slot IDs stay stable.
 DISPLAY_ORDER = tuple(range(LEGACY_SLOTS, SLOT_COUNT)) + tuple(range(LEGACY_SLOTS))
+SOUND_MODES = {'cycle': '列表循环', 'random': '随机播放'}
 
 
 def slot_location(index):
@@ -73,6 +74,12 @@ def sound_label(value,effects=None):
     return Path(value).stem
 
 
+def slot_sound_label(slot, effects=None):
+    if slot.extra_sounds:
+        return f'{len(slot.sounds)} 个音效 · {SOUND_MODES[slot.sound_mode]}'
+    return sound_label(slot.sound, effects)
+
+
 def key_label(key: str, compact=False) -> str:
     mouse={'mouse_left':'M1','mouse_right':'M2','mouse_middle':'M3','mouse_4':'M4','mouse_5':'M5'}
     if compact:
@@ -93,11 +100,20 @@ class SkillSlot:
     ability: bool | None = None  # None follows the identified icon.
     temporary_gcd: float | None = None
     temporary_duration: float = 15.0
+    extra_sounds: tuple[str, ...] = ()
+    sound_mode: str = 'cycle'
+
+    @property
+    def sounds(self):
+        return (self.sound, *self.extra_sounds) if self.sound else ()
 
     def with_changes(self, **changes):
         if 'icon' in changes and changes['icon'] != self.icon:
             changes.setdefault('ability',None)
             changes.setdefault('temporary_gcd', None)
+        if 'sound' in changes:
+            changes.setdefault('extra_sounds', ())
+            changes.setdefault('sound_mode', 'cycle')
         return replace(self,**changes)
 
 
@@ -150,8 +166,19 @@ class SkillbarConfig:
                 raise ValueError('临时 GCD 应在 0.1 到 60 秒之间。')
             if not math.isfinite(duration) or not .1 <= duration <= 600:
                 raise ValueError('持续时间应在 0.1 到 600 秒之间。')
-            cleaned.append(SkillSlot(canonical_key(slot.key), relative_name(slot.icon), sound_reference(slot.sound),
-                                     volume, slot.ability, gcd, duration if gcd is not None else 15.0))
+            sound = sound_reference(slot.sound)
+            if not isinstance(slot.extra_sounds, (list, tuple)):
+                raise ValueError('绑定音效列表格式错误。')
+            extra_sounds = tuple(sound_reference(value) for value in slot.extra_sounds)
+            if extra_sounds and (not sound or None in extra_sounds or
+                                 len(set((sound, *extra_sounds))) != len(extra_sounds) + 1):
+                raise ValueError('绑定音效列表不能含空项或重复项。')
+            if not isinstance(slot.sound_mode, str) or slot.sound_mode not in SOUND_MODES:
+                raise ValueError('绑定音效的播放方式无效。')
+            cleaned.append(replace(slot, key=canonical_key(slot.key), icon=relative_name(slot.icon),
+                                   sound=sound, volume=volume, temporary_gcd=gcd,
+                                   temporary_duration=duration if gcd is not None else 15.0,
+                                   extra_sounds=extra_sounds, sound_mode=slot.sound_mode if extra_sounds else 'cycle'))
         keys = [slot.key for slot in cleaned if slot.key]
         if len(keys) != len(set(keys)):
             raise ValueError('该按键已绑定其他技能，请先修改或清空。')
@@ -174,6 +201,8 @@ class SkillbarConfig:
         overrides={}
         temporary_gcds={}
         for index,value in enumerate(serialized):
+            if not value['extra_sounds']:
+                del value['extra_sounds'], value['sound_mode']
             ability=value.pop('ability')
             if ability is not None:overrides[str(index)]=ability
             gcd=value.pop('temporary_gcd')
@@ -342,18 +371,26 @@ class SkillbarConfig:
         self._commit(slots, self.cooldown, review)
 
     def bind(self, index: int, sound: str | None):
-        before = self.slots[index].sound
-        self.update_slot(index, sound=sound)
-        self.last_binding = (index, before, self.slots[index].sound)
+        self.bind_sounds(index, (sound,) if sound is not None else ())
+
+    def bind_sounds(self, index, sounds, mode='cycle'):
+        if not 0 <= index < SLOT_COUNT:
+            raise ValueError('技能格位置无效。')
+        if not isinstance(sounds, (list, tuple)):
+            raise ValueError('绑定音效列表格式错误。')
+        before = self.slots[index]
+        self.update_slot(index, sound=sounds[0] if sounds else None, extra_sounds=sounds[1:], sound_mode=mode)
+        self.last_binding = (index, before, self.slots[index])
 
     def undo(self) -> bool:
         if self.last_binding is None:
             return False
         index, before, after = self.last_binding
-        if self.slots[index].sound != after:
+        slot = self.slots[index]
+        if (slot.sounds, slot.sound_mode) != (after.sounds, after.sound_mode):
             self.last_binding = None
             return False
-        self.update_slot(index, sound=before)
+        self.update_slot(index, sound=before.sound, extra_sounds=before.extra_sounds, sound_mode=before.sound_mode)
         self.last_binding = None
         return True
 

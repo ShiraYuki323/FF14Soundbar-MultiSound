@@ -13,6 +13,69 @@ class SkillbarRuntimeTests(unittest.TestCase):
     def setUpClass(cls):
         cls.app = QApplication.instance() or QApplication([])
 
+    def test_multi_sound_hotkey_and_wheel_share_cycle_and_repeat_last(self):
+        from unittest.mock import Mock
+        import numpy as np
+        import sr_roulette as sr
+        from skillbar_model import SkillbarConfig
+        from skillbar_runtime import CooldownAudio, SkillbarAudioEngine, SkillbarBank, SkillbarInputPoller
+        from sounds_config import SoundsConfig
+
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            model = SkillbarConfig(root / 'bar.json')
+            effects = SoundsConfig(root / 'sounds.json')
+            model.bind_sounds(12, ('a.wav', 'missing.wav', 'b.wav'))
+            effects.setting('b.wav').volume = .6
+            model.update_slot(12, volume=.5)
+            cfg = dict(sr.DEFAULT_CONFIG, hold_ms=0)
+            a = np.zeros((4800, 2), dtype=np.float32)
+            b = np.zeros((9600, 2), dtype=np.float32)
+            clips = {'a.wav': a, 'b.wav': b}
+            with patch.object(sr, 'decode_clip', side_effect=lambda path, *_: clips.get(path.name)):
+                bank = SkillbarBank(model, root, effects)
+                engine = SkillbarAudioEngine(bank, cfg)
+                now = [0.]
+                audio = CooldownAudio(engine, model, clock=lambda: now[0])
+                mix = Mock()
+                mix.trigger.return_value = True
+                down = set()
+                wheel = SimpleNamespace(raw=None, active=False, poll_selection=lambda: None)
+                wheel.show_wheel = lambda: setattr(wheel, 'active', True)
+                wheel.commit = lambda: (setattr(wheel, 'active', False), 12)[1]
+
+                with patch.object(sr, 'is_down', side_effect=lambda code: code in down), \
+                     patch.object(engine, '_active_mixers', return_value=[mix]):
+                    poller = SkillbarInputPoller(cfg, wheel, audio, model)
+
+                    def keys(*names):
+                        down.clear()
+                        down.update(map(sr.vk_of, names))
+                        poller.tick()
+
+                    keys('1'); keys()
+                    now[0] = 1
+                    keys('1'); keys()
+                    now[0] = 3
+                    keys('y'); keys('y'); keys()
+                    self.assertEqual([(len(c.args[0]), c.args[1]) for c in mix.trigger.call_args_list],
+                                     [(4800, .5), (9600, .3)])
+                    now[0] = 6
+                    self.assertTrue(audio.play_repeat_last())
+                    self.assertIs(mix.trigger.call_args.args[0], b)
+                    now[0] = 9
+                    keys('1'); keys()
+                    self.assertIs(mix.trigger.call_args.args[0], a)
+
+                    model.bind_sounds(12, ('a.wav', 'b.wav'), 'random')
+                    bank.reload()
+                    engine.load(stop_playing=False)
+                    now[0] = 12
+                    with patch('skillbar_runtime.random.shuffle', side_effect=lambda order: order.reverse()):
+                        keys('y'); keys('y'); keys()
+                    self.assertIs(mix.trigger.call_args.args[0], b)
+                    poller.deleteLater()
+
     def test_wheel_only_blocks_direct_playback_but_allows_wheel_selection_and_pause(self):
         import sr_roulette as sr
         from skillbar_model import SkillbarConfig

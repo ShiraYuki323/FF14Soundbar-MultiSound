@@ -57,7 +57,7 @@ class PresetActions:
 
     def finish_preset_change(self):
         self.stop_preview();self.close_binding();self.refresh();self.changed.emit('preset')
-        missing={slot.sound for slot in self.model.slots if slot.sound and self.missing_reference(slot.sound)}
+        missing={name for slot in self.model.slots for name in slot.sounds if self.missing_reference(name)}
         text='已切换套装：'+self.model.preset_name
         if missing:text+=f' · {len(missing)} 个音效文件缺失，绑定已保留，可重新导入。'
         self.status.setText(text)

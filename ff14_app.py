@@ -17,7 +17,7 @@ import sr_roulette as sr
 from app_paths import prepare_user_data,ensure_empty_sound_config,user_data_dir,_atomic_bytes
 from sounds_config import SoundsConfig
 from skillbar_model import SkillbarConfig,canonical_key
-from skillbar_runtime import SkillbarBank,CooldownAudio,SkillbarInputPoller
+from skillbar_runtime import SkillbarBank,CooldownAudio,SkillbarInputPoller,SkillbarAudioEngine
 from skillbar_icons import IconCatalog
 from skillbar_ui import SkillbarWindow
 from skillbar_overlay import SkillbarController
@@ -57,7 +57,7 @@ class NativeApplication:
         self._saved_cfg=dict(self.cfg)
         self.effects=SoundsConfig(self.data/'sounds.json'); self.effects.load()
         self.bank=SkillbarBank(self.model,self.data/'sounds',self.effects)
-        self.engine=sr.AudioEngine(self.bank,self.cfg) if enable_audio else None
+        self.engine=SkillbarAudioEngine(self.bank,self.cfg) if enable_audio else None
         self.audio=CooldownAudio(self.engine,self.model) if self.engine else None
         self.raw=self.poller=self.controller=self.tray=self.watch=self.tray_pause=None
         self.window=SkillbarWindow(self.model,self.data/'sounds',self.icons,self.cfg,self.engine,resources=resource_dir,effects=self.effects)
@@ -144,7 +144,7 @@ class NativeApplication:
             if callable(reset):reset()
         if self.poller and reason in ('sound','key','icon','preset','input','temporary_gcd'):
             self.poller.rebuild_bindings()
-        if reason=='preset' and self.engine:self.engine.last_idx=None
+        if reason=='preset' and self.engine:self.engine.reset_slot_playback()
         if reason=='preset' and self.audio:self.audio.reset_preset_state()
         if self.controller:self.controller.widget.update()
 
